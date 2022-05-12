@@ -1,0 +1,915 @@
+---
+title: "Controllability_detection2"
+author: "Hillary Raab"
+date: "10/28/2020"
+output: 
+  html_document:
+      toc: yes
+      toc_float:
+        collapsed: false
+        smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, echo = FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r load packages, include=FALSE}
+#load packages
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(doBy)
+library(afex)
+library(ggplot2)
+library(pander)
+require(lmtest)
+library(psych) #sample descriptives
+library(cowplot) #side by side plots
+library(ggbeeswarm)
+#library(sjPlot)
+require(gridExtra)
+```
+
+```{r set working directory, include=FALSE}
+#set working directory
+#setwd("/Users/hillaryraab/Box Sync/HartleyLab_Shared/1_Studies/MonCon_HillaryKaterina/Analyses/Hillary/")
+
+#baseDir <- '/Users/hillaryraab/Box Sync/HartleyLab_Shared/1_Studies/MonCon_HillaryKaterina/'
+#dataDir <- 'Analyses/Hillary/n_90/'
+#wmDir <- 'DATA/workingMemoryTask/n_90/'
+#qDir <- 'DATA/qualtricsQuestionnaires/n_90/'
+```
+
+```{r set dirs}
+#set working directory
+#setwd("/Users/hillaryraab/Documents/controllability_detection/analysis_code/")
+
+baseDir <- 'controllability_detection'
+dataDir <- '../data'
+taskDir <- '../data/controllability_task'
+wmDir <- '../data/working_memory_task'
+qDir <- '../data/posttask_questionnaire'
+modelingDir <- 'computational_modeling'
+```
+
+
+
+```{r load task data, include=FALSE}
+###load data from state prediction trials and add headers
+dataAllSubjs <- read.csv(file.path(taskDir, "predictionAllSubjs_n90.csv"), header = FALSE)
+colnames(dataAllSubjs)<- c("SubjID","Run","globalPredictiveTrialNumWPractice","globalPredictiveTrialNum","globalPredictivePairNum","predictiveTrialNum", "predictiveTrialPair","streak","reversalNum","Condition","noise1","noise2","noise3","firstOrSecondPredictiveTrial","last_explor_state","resp_choice1","hyp_LR","resp_side","resp_RT","resp_choice2","correct_resp","resp_acc","feedback","trial_onset","resp_onset","post_onset","post_offset","post_jitter","state")
+
+dataAllSubjs$SubjID<-as.factor(dataAllSubjs$SubjID)
+dataAllSubjs$Condition_factor <- as.factor(dataAllSubjs$Condition)
+dataAllSubjs$state<- as.factor(dataAllSubjs$state)
+dataAllSubjs$z_globalPredictiveTrialNum<-scale(dataAllSubjs$globalPredictiveTrialNum,center=TRUE,scale=TRUE) # trial num as continuous variable, mean centered and scaled
+dataAllSubjs$z_streak<- scale(dataAllSubjs$streak,center=TRUE,scale=TRUE)
+
+
+###load data from condition prediction trials and add headers
+pilotPredictionAllSubjs <- read.csv(file.path(taskDir,'pilotPredictionAllSubjs_n90.csv') ,header=FALSE) 
+colnames(pilotPredictionAllSubjs)<- c("SubjID","Run","globalPredictiveTrialNumWPractice","globalPredictiveTrialNum","pilotPredictionNum","pilotPredictionNum2","streak","reversalNum","Condition","state","resp_choice1","resp_side","resp_RT","resp_choice2","correct_resp","resp_acc","feedback","trial_onset","resp_onset","post_onset","post_offset")
+
+pilotPredictionAllSubjs$SubjID<-as.factor(pilotPredictionAllSubjs$SubjID)
+pilotPredictionAllSubjs$Condition_factor <- as.factor(pilotPredictionAllSubjs$Condition)
+pilotPredictionAllSubjs$globalPredictiveTrialNum <- as.numeric((pilotPredictionAllSubjs$globalPredictiveTrialNum)/2)
+pilotPredictionAllSubjs$z_globalPredictiveTrialNum<-scale(pilotPredictionAllSubjs$globalPredictiveTrialNum,center=TRUE,scale=TRUE) 
+pilotPredictionAllSubjs$z_streak<- scale(pilotPredictionAllSubjs$streak,center=TRUE,scale=TRUE)
+
+###load data from exploratory trials and add headers
+exploreAllSubjs <- read.csv(file.path(taskDir,'exploreAllSubjs_n90.csv') ,header=FALSE) 
+colnames(exploreAllSubjs)<- c("SubjID","Run","globalNumWPractice","globalTrialNum","runTrialNum","streak","reversalNum","Condition","noise1","noise2","noise3","state","snext","smax","violation","side","resp_side","resp_RT","resp_choice","trial_onset","resp_onset")
+
+exploreAllSubjs$SubjID <- as.factor(exploreAllSubjs$SubjID)
+exploreAllSubjs$Condition_factor <- as.factor(exploreAllSubjs$Condition)
+exploreAllSubjs$z_globalTrialNum<-scale(exploreAllSubjs$globalTrialNum,center=TRUE,scale=TRUE) # trial num as continuous variable, mean centered and scaled
+```
+
+```{r load age data}
+###load age data
+Age<- read.csv(file.path(dataDir,"Age_n90.csv"),header=FALSE)
+colnames(Age)<-c("SubjID","Gender","Age","AgeGroup")
+Age$SubjID<-as.factor(Age$SubjID)
+
+#z-score age and age^2
+Age$z_age<-scale(Age$Age,center=TRUE,scale=TRUE)
+Age$z_ageSq<-Age[,"z_age"]^2
+
+#sort and rename categorical age groups
+Age$AgeGroup_sorted <- factor(Age$AgeGroup, levels=c('Child','Teen','Adult')) #order by age
+levels(Age$AgeGroup_sorted) <- c("Children","Adolescents","Adults") #rename
+```
+
+```{r load working memory data}
+#note that WM task was not collected on 6 participants as the task was incorporated into the protocol after the study began
+WorkingMemory <- read.csv(file.path(wmDir, "2019-06-18 13.25.50 Assessment Scores.csv"), header = TRUE)
+
+#rename columns
+WorkingMemory <- WorkingMemory %>% rename(SubjID= PIN)
+
+#Removes word "monCon"
+WorkingMemory <- WorkingMemory %>% mutate(SubjID = str_remove_all(SubjID, "MonCon"))
+WorkingMemory <- WorkingMemory %>% mutate(SubjID = str_remove_all(SubjID, "Moncon"))
+```
+
+```{r merge dataframes}
+Age  <- merge(Age,WorkingMemory[, c("SubjID","Age.Corrected.Standard.Score","RawScore")],by="SubjID", all.x = TRUE)
+Age$z_wm_score <- scale(Age$Age.Corrected.Standard.Score,center=TRUE,scale=TRUE)
+
+###merge dataframes
+dataAllSubjs  <- merge(dataAllSubjs,Age,by="SubjID")
+pilotPredictionAllSubjs  <- merge(pilotPredictionAllSubjs,Age,by="SubjID")
+exploreAllSubjs <- merge(exploreAllSubjs,Age,by="SubjID")
+```
+
+
+#Descriptive Statistics of Participants
+```{r descriptive stats}
+describeBy(Age[, c("Age", "AgeGroup")],group="AgeGroup")
+AgeGenderStats <- count(Age, AgeGroup,Gender)
+
+#gender distribution
+pander(AgeGenderStats)
+```
+
+*Histogram of Participants*
+```{r historgram of ages}
+#histogram of age and gender distribution (still need to fix it so that each bin is 1 year from 8.0 to 9.0)
+ageHistogram <- ggplot(Age, aes(x = Age, fill = Gender)) + geom_histogram(position="stack",bins = 18) + 
+  ylab("Participant Count") + xlab("Age") + guides(fill=guide_legend(title="Gender"))
+plot(ageHistogram)
+```
+
+
+```{r mean state prediction accuracy}
+#Set up state prediction data
+#overall mean accuracy for each participant and per condition
+meanAccParticipant <- dataAllSubjs %>% group_by(SubjID) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+meanAccCondition <- dataAllSubjs %>% group_by(Condition) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+
+#accuracy by condition, by participant, 1 = uncontrollable, 2 = controllable
+meanAccs <- dataAllSubjs %>% group_by(Condition, SubjID) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+
+#add age
+meanAccs  <- merge(meanAccs,Age,by="SubjID")
+meanAccParticipant <- merge(meanAccParticipant,Age,by="SubjID")
+names(meanAccParticipant)[names(meanAccParticipant)=="meanAcc"]<-"stateMeanAcc"
+
+#accuracy by condition and age group
+meanAccsByAgeBin <- meanAccs %>% group_by(Condition, AgeGroup) %>% summarise(N = n(), meanAcc = mean(meanAcc, na.rm = TRUE), sdAcc = sd(meanAcc, na.rm = TRUE), seAcc = sdAcc/(sqrt(N)))
+```
+
+```{r mean condition prediction accuracy}
+#Set up condition prediction data
+#overall mean accuracy for each participant and per condition
+meanAccParticipant_Pilot <- pilotPredictionAllSubjs %>% group_by(SubjID) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+meanAccCondition_Pilot <- pilotPredictionAllSubjs %>% group_by(Condition) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+
+#accuracy by condition, by participant, 1 = uncontrollable, 2 = controllable
+meanAccs_Pilot <- pilotPredictionAllSubjs %>% group_by(Condition, SubjID) %>% summarize(meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE))
+
+#add age
+meanAccs_Pilot  <- merge(meanAccs_Pilot,Age,by="SubjID")
+
+#accuracy by condition and age group
+meanAccs_PilotByAgeBin <- meanAccs_Pilot %>% group_by(Condition, AgeGroup) %>% summarise(N = n(), meanAcc = mean(meanAcc, na.rm = TRUE), sdAcc = sd(meanAcc, na.rm = TRUE), seAcc = sdAcc/(sqrt(N)))
+
+```
+
+```{r mean optimal exploratory choice}
+#Set up exploratory choice data
+#proportion optimal choice during exploratory trials
+#recode all choices to either 1) optimal 0)not optimal
+#optimal choices
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==1 & exploreAllSubjs$resp_choice==1] <- 1
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==2 & exploreAllSubjs$resp_choice==3] <- 1
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==3 & exploreAllSubjs$resp_choice==2] <- 1
+
+
+#not optimal choices
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==1 & exploreAllSubjs$resp_choice==2] <- 0
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==2 & exploreAllSubjs$resp_choice==1] <- 0
+exploreAllSubjs$optimalChoice[exploreAllSubjs$state==3 & exploreAllSubjs$resp_choice==3] <- 0
+
+#proportion optimal choices for each participant
+optimalChoice <- exploreAllSubjs %>% group_by(SubjID) %>% summarize(total_optimalChoice = sum(optimalChoice, na.rm = TRUE), optimalChoice = mean(optimalChoice, na.rm = TRUE))
+
+meanAccParticipant <- merge(meanAccParticipant,optimalChoice,by="SubjID")
+meanAccParticipant$z_optimalChoice <- scale(meanAccParticipant$optimalChoice,center=TRUE,scale=TRUE)
+```
+
+
+```{r proportion optimal explo choices}
+# adding optimal choice correctly for each participant
+propOptChoice <- as.data.frame(colMeans(matrix(exploreAllSubjs$optimalChoice, nrow=6)))
+z_propOptChoice <- scale(propOptChoice,center=TRUE,scale=TRUE)
+z_propOptChoice2 <- z_propOptChoice[rep(seq_len(nrow(z_propOptChoice)), each = 2), ]
+dataAllSubjs$z_propOptimalChoice <- z_propOptChoice2
+pilotPredictionAllSubjs$z_propOptimalChoice <- z_propOptChoice
+
+#dataAllSubjs$resp_acc <- as.factor(dataAllSubjs$resp_acc)
+#pilotPredictionAllSubjs$resp_acc <- as.factor(pilotPredictionAllSubjs$resp_acc)
+
+```
+
+#WASI analysis
+Sanity check to confirm no age effects on IQ.
+```{r initialize WASI}
+#load subject log
+WASI <- read.csv(file.path(dataDir, "WASIscores.csv"),header=FALSE) 
+colnames(WASI)<- c("SubjID","Verbal","MR","IQ", "Raw_MR")
+
+#Removes word "monCon"
+WASI <- WASI %>% mutate(SubjID = str_remove_all(SubjID, "MonCon"))
+
+meanAccParticipant <- merge(meanAccParticipant,WASI,by="SubjID", all = TRUE)
+remove(WASI)
+```
+
+```{r no age effects on IQ}
+#age vs. age-squared models
+IQ_age.m <- lm(IQ~z_age,data=meanAccParticipant)
+IQ_agesq.m <- lm(IQ~z_age + z_ageSq,data=meanAccParticipant)
+
+anova(IQ_age.m,IQ_agesq.m)
+
+summary(IQ_age.m)
+
+#cohen's f-squared
+meanAccParticipant$z_IQ <-scale(meanAccParticipant$IQ,center=TRUE,scale=TRUE) # continuous variable, mean centered and scaled
+IQ_age.m <- lm(IQ~z_age,data=meanAccParticipant)
+z_IQ_age.m <- lm(z_IQ~z_age,data=meanAccParticipant)
+Rsq1 = summary(z_IQ_age.m) $r.squared
+(Rsq1)/(1-Rsq1)
+```
+
+# State Prediction Accuracy
+## Run difficulty
+Does performance on state predictions differ on the easier vs. harder runs of the task?
+```{r no effect of run difficulty on state prediction accuracy}
+#Does performance decrease when state transitions become more probabilistic? 
+difficulty <- ifelse((dataAllSubjs$Run == 1) | (dataAllSubjs$Run == 3), 'easy', 
+                     ifelse((dataAllSubjs$Run == 2) | (dataAllSubjs$Run == 4), 'hard', NA))
+
+dataAllSubjs <- data.frame(dataAllSubjs,difficulty)
+
+model_difficulty <- mixed(resp_acc~z_age*difficulty+(1+difficulty|SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+nice(model_difficulty)
+```
+
+
+## Mixed-effects state prediction models
+First, we wanted to examine how accuracy on the state prediction trials changed as a function of age, trial, condition, working memory, and exploratory trial.
+```{r state pred maximal state prediction wm model, eval = F}
+#did not converge
+model1 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+z_propOptimalChoice*z_globalPredictiveTrialNum*Condition_factor|SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+```
+
+```{r state pred model 2, eval = F}
+#removed the interaction between random slopes and intercepts
+#did not converge
+model2 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+z_propOptimalChoice*z_globalPredictiveTrialNum*Condition_factor||SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+```
+
+```{r state pred model 3, warnings=FALSE, message=FALSE}
+#final model with working memory
+#sig: condition, age, trial number, optimal choice, condition*optimal choice, age*optimal choice
+model3 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+(z_propOptimalChoice+z_globalPredictiveTrialNum)*Condition_factor||SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+model3_ageSq <- mixed(resp_acc~Condition_factor*(z_age+z_ageSq)*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+(z_propOptimalChoice+z_globalPredictiveTrialNum)*Condition_factor||SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+anova(model3,model3_ageSq)
+nice(model3)
+#summary(model3)
+```
+
+
+```{r state pred model 3 no wm, warnings=FALSE, message=FALSE}
+#final model without working memory
+#sig: condition, age, trial number, optimal choice, condition*optimal choice, age*optimal choice
+model3_no_wm <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*z_propOptimalChoice+(1+(z_propOptimalChoice+z_globalPredictiveTrialNum)*Condition_factor||SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+model3_no_wm_ageSq <- mixed(resp_acc~Condition_factor*(z_age+z_ageSq)*z_globalPredictiveTrialNum*z_propOptimalChoice+(1+(z_propOptimalChoice+z_globalPredictiveTrialNum)*Condition_factor||SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+anova(model3_no_wm,model3_no_wm_ageSq)
+nice(model3_no_wm)
+#summary(model3_no_wm)
+```
+
+##Trials since reversal
+```{r accuracy state LMER, warnings=FALSE, message=FALSE}
+#accuracy following reversals by condition
+accuracyConFollowingReversal_linAge.m <- mixed(resp_acc~z_streak*Condition_factor*z_age+(1+Condition_factor|SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1000000)),family="binomial",method="LRT")
+accuracyConFollowingReversal_sqAge.m <- mixed(resp_acc~z_streak*Condition_factor*(z_age+z_ageSq)+(1+Condition_factor|SubjID),data=dataAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1000000)),family="binomial",method="LRT")
+
+#test for best model
+anova(accuracyConFollowingReversal_linAge.m,accuracyConFollowingReversal_sqAge.m)
+
+#best model
+nice(accuracyConFollowingReversal_linAge.m)
+```
+
+## Response times following reversals 
+```{r RT state LMER, warnings=FALSE, message=FALSE}
+#Do state prediction accuracy reaction times differ by conditon?
+dataAllSubjs$log_resp_RT <- log10(dataAllSubjs$resp_RT)
+
+rt_m1 <- mixed(log_resp_RT~Condition_factor*z_age*z_streak+(1+Condition_factor|SubjID),data=dataAllSubjs,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+rt_m2 <- mixed(log_resp_RT~Condition_factor*(z_age+z_ageSq)*z_streak+(1+Condition_factor|SubjID),data=dataAllSubjs,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+anova(rt_m1,rt_m2)
+
+nice(rt_m1)
+```
+# Condition Predictions
+
+## Run difficulty
+```{r no effect of run difficulty on condition prediction accuracy, warnings=FALSE, message=FALSE}
+#Does performance decrease when state transitions become more probabilistic? 
+difficulty <- ifelse((pilotPredictionAllSubjs$Run == 1) | (pilotPredictionAllSubjs$Run == 3), 'easy', 
+                     ifelse((pilotPredictionAllSubjs$Run == 2) | (pilotPredictionAllSubjs$Run == 4), 'hard', NA))
+
+pilotPredictionAllSubjs <- data.frame(pilotPredictionAllSubjs,difficulty)
+
+#did not converge
+#model_difficulty_condition_preds <- mixed(resp_acc~z_age*difficulty+(1+difficulty|SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+#nice(model_difficulty_condition_preds)
+
+#removed subject-specific slope
+model_difficulty_condition_preds <- mixed(resp_acc~z_age*difficulty+(1|SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+nice(model_difficulty_condition_preds)
+```
+## Mixed effects condition prediction models
+```{r condition pred maximal wm model, eval = F}
+#did not converge
+pilot_model1 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+Condition_factor*z_globalPredictiveTrialNum*z_propOptimalChoice|SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+```
+
+```{r condition pred model 2, eval = F}
+#did not converge
+pilot_model2 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+Condition_factor*z_globalPredictiveTrialNum*z_propOptimalChoice||SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+```
+
+```{r condition pred model 3, warnings=FALSE, message=FALSE}
+#final model with working memory
+#sig: condition, age, trial, opt choice, working memory (.04966), age*optimal choice
+pilot_model3 <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+Condition_factor*(z_globalPredictiveTrialNum+z_propOptimalChoice)||SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+pilot_model3_ageSq <- mixed(resp_acc~Condition_factor*(z_age+z_ageSq)*z_globalPredictiveTrialNum*(z_propOptimalChoice+z_wm_score)+(1+Condition_factor*(z_globalPredictiveTrialNum+z_propOptimalChoice)||SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+anova(pilot_model3,pilot_model3_ageSq)
+nice(pilot_model3)
+summary(pilot_model3)
+```
+
+
+```{r condition pred model 3 without wm, warnings=FALSE, message=FALSE}
+#final model without working memory
+pilot_model3_no_wm <- mixed(resp_acc~Condition_factor*z_age*z_globalPredictiveTrialNum*z_propOptimalChoice+(1+Condition_factor*(z_globalPredictiveTrialNum+z_propOptimalChoice)||SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+pilot_model3_ageSq_no_wm <- mixed(resp_acc~Condition_factor*(z_age+z_ageSq)*z_globalPredictiveTrialNum*z_propOptimalChoice+(1+Condition_factor*(z_globalPredictiveTrialNum+z_propOptimalChoice)||SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT", expand_re = TRUE)
+
+anova(pilot_model3_no_wm,pilot_model3_ageSq_no_wm)
+nice(pilot_model3_no_wm)
+summary(pilot_model3_no_wm)
+```
+
+#Relationship between State and Condition Prediction Accuracy
+Is accuracy on state predictions predictive of accuracy on condition predictions across age?
+```{r rlnsp bn state & prediction}
+names(meanAccParticipant_Pilot)[names(meanAccParticipant_Pilot)=="meanAcc"]<-"pilotMeanAcc"
+meanAccParticipant  <- merge(meanAccParticipant,meanAccParticipant_Pilot,by="SubjID")
+
+#linear model
+acc_sc_m1 <- lm(pilotMeanAcc~stateMeanAcc*z_age,data=meanAccParticipant)
+acc_sc_m2 <- lm(pilotMeanAcc~stateMeanAcc*(z_age+z_ageSq),data=meanAccParticipant)
+
+#model comparison
+anova(acc_sc_m1,acc_sc_m2)
+
+summary(acc_sc_m1)
+``` 
+
+
+##Trials since reversal
+```{r accuracy condition LMERs, warnings=FALSE, message=FALSE}
+#accuracy following reversals by condition
+accuracyConFollowingReversal_linAge.m <- mixed(resp_acc~z_streak*Condition_factor*z_age+(1+Condition_factor|SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1000000)),family="binomial",method="LRT")
+accuracyConFollowingReversal_sqAge.m <- mixed(resp_acc~z_streak*Condition_factor*(z_age+z_ageSq)+(1+Condition_factor|SubjID),data=pilotPredictionAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1000000)),family="binomial",method="LRT")
+
+#test for best model
+anova(accuracyConFollowingReversal_linAge.m,accuracyConFollowingReversal_sqAge.m)
+
+#best model
+nice(accuracyConFollowingReversal_linAge.m)
+```
+
+## Response times following reversals 
+```{r RT condition LMERs, warnings=FALSE, message=FALSE}
+#Do condition prediction response times differ by conditon, age, or trials since reversal?
+pilotPredictionAllSubjs$log_resp_RT <- log10(pilotPredictionAllSubjs$resp_RT)
+
+rt_m3 <- mixed(log_resp_RT~Condition_factor*z_age*z_streak+(1+Condition_factor|SubjID),data=pilotPredictionAllSubjs,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+rt_m4 <- mixed(log_resp_RT~Condition_factor*(z_age+z_ageSq)*z_streak+(1+Condition_factor|SubjID),data=pilotPredictionAllSubjs,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+anova(rt_m3,rt_m4)
+
+nice(rt_m3)
+```
+
+
+## WM Mediation between age and accuracy
+```{r WM mediation b/n age and state and condition accuracy, warnings=FALSE, message=FALSE}
+library("mediation")
+set.seed(2021)
+
+#include only the 84 participants with WM scores
+meanAccParticipant_n84 <- meanAccParticipant[!(is.na(meanAccParticipant$z_wm_score)),]
+
+meanAccParticipant_n84$z_Age_n84 <- as.vector(scale(meanAccParticipant_n84$Age,center=TRUE,scale=TRUE))
+meanAccParticipant_n84$z_RawScore_n84 <- as.vector(scale(meanAccParticipant_n84$RawScore,center=TRUE,scale=TRUE))
+meanAccParticipant_n84$z_stateMeanAcc_n84 <- as.vector(scale(meanAccParticipant_n84$stateMeanAcc,center=TRUE,scale=TRUE))
+meanAccParticipant_n84$z_pilotMeanAcc_n84 <- as.vector(scale(meanAccParticipant_n84$pilotMeanAcc,center=TRUE,scale=TRUE))
+
+
+#Is there a main effect of age on state prediction accuracy?
+total.fit <- lm(z_stateMeanAcc_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(total.fit)
+#Is there a relationship between age and working memory?
+med.fit <- lm(z_RawScore_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(med.fit)
+#Is there a relationship between working memory and state prediction accuracy, while controlling for age?
+out.fit <- lm(z_stateMeanAcc_n84 ~ z_RawScore_n84 + z_Age_n84, data = meanAccParticipant_n84)
+summary(out.fit)
+#Does working memory mediate that relationship? Yes
+#mediation model for non-parametric bootstrap with 10000 simulations
+med.out <- mediate(med.fit, out.fit, treat = "z_Age_n84", mediator = "z_RawScore_n84",
+                   boot = TRUE, sims = 10000)
+summary(med.out)
+plot(med.out)
+
+
+#Is there a main effect of age on pilot prediction accuracy?
+total.fit <- lm(z_pilotMeanAcc_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(total.fit)
+#Is there a relationship between age and working memory?
+med.fit <- lm(z_RawScore_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(med.fit)
+#Is there a relationship between working memory and pilot prediction accuracy, while controlling for age?
+out.fit <- lm(z_pilotMeanAcc_n84 ~ z_RawScore_n84 + z_Age_n84, data = meanAccParticipant_n84)
+summary(out.fit)
+#Does working memory mediate that relationship? Yes
+#mediation model for non-parametric bootstrap with 10000 simulations
+med.out <- mediate(med.fit, out.fit, treat = "z_Age_n84", mediator = "z_RawScore_n84",
+                   boot = TRUE, sims = 10000)
+summary(med.out)
+```
+
+# Exploratory choices
+```{r diagnostic choice LMER, warnings=FALSE, message=FALSE}
+#Examine effects of condition, age, trial on optimal exploratory choice
+optimalChoiceLearningCond1_age.m <- mixed(optimalChoice~z_globalTrialNum*z_age*Condition_factor+(1+Condition_factor*z_globalTrialNum|SubjID),data=exploreAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+
+optimalChoiceLearningCond1_ageSq.m <- mixed(optimalChoice~z_globalTrialNum*(z_age+z_ageSq)*Condition_factor+(1+Condition_factor*z_globalTrialNum|SubjID),data=exploreAllSubjs,control=glmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),family="binomial",method="LRT")
+
+anova(optimalChoiceLearningCond1_age.m,optimalChoiceLearningCond1_ageSq.m)
+nice(optimalChoiceLearningCond1_ageSq.m)
+summary(optimalChoiceLearningCond1_ageSq.m)
+#tab_model(optimalChoiceLearningCond1_ageSq.m, show.se = TRUE, show.stat = TRUE)
+```
+
+# Figure 2
+```{r figure 2a setup}
+#create trial num for learning plots and analyses
+uncon_trials <- dataAllSubjs[dataAllSubjs$Condition == 1,]
+numTrials <- uncon_trials %>% group_by(SubjID) %>% summarise(num_rows = length(SubjID))
+uncon_trials$num_trials <- rep(1:numTrials$num_rows[1],times=length(numTrials$SubjID))
+
+con_trials <- dataAllSubjs[dataAllSubjs$Condition == 2,]
+numTrials <- con_trials %>% group_by(SubjID) %>% summarise(num_rows = length(SubjID))
+con_trials$num_trials <- rep(1:numTrials$num_rows[1],times=length(numTrials$SubjID))
+
+dataAllSubjs_learning <- rbind(uncon_trials, con_trials)
+
+dataAllSubjs_learning$Condition_sorted <- dataAllSubjs_learning$Condition_factor
+levels(dataAllSubjs_learning$Condition_sorted) <- c("Uncontrollable","Controllable")
+dataAllSubjs_learning$Condition_sorted <- factor(dataAllSubjs_learning$Condition_sorted, levels=rev(levels(dataAllSubjs_learning$Condition_sorted)))
+```
+
+```{r fig 2a, warnings=FALSE, message=FALSE}
+## plot accuracy as of a function of trial number for each condition, with separate panels per age group
+learning_conditions_ages <- dataAllSubjs_learning %>% group_by(num_trials,Condition_sorted,AgeGroup_sorted) %>% summarise(N = n(), meanAcc = mean(resp_acc, na.rm = TRUE), sdAcc = sd(resp_acc, na.rm = TRUE), seAcc = sdAcc/(sqrt(N)))
+
+stateAcc_learning_cond_age_plot <- ggplot(learning_conditions_ages, aes(x = num_trials, y=meanAcc, color=Condition_sorted)) +
+    geom_line(alpha=.5) + 
+    facet_wrap(~AgeGroup_sorted) +
+    geom_smooth(method="lm", aes(fill=Condition_sorted),alpha=.4,size=1.5) +
+    labs(x="Trial Number", y="State Prediction Accuracy") +
+    ylim(0,1) +
+    geom_hline(yintercept=.33, linetype="dashed", color = "black") + #line at chance
+    theme_classic(base_size=14) + theme(legend.position="none") + 
+    scale_color_manual(values=c('#559CAD', '#3D5A80'),name="Condition") + scale_fill_manual(values=c('#559CAD', '#3D5A80'),name="Condition") 
+```
+
+
+```{r fig 2b set up, warnings=FALSE, message=FALSE}
+#create trial num for learning plots and analyses
+uncon_explo_trials <- exploreAllSubjs[exploreAllSubjs$Condition == 1,]
+numTrials <- uncon_explo_trials %>% group_by(SubjID) %>% summarise(num_rows = length(SubjID))
+uncon_explo_trials$num_trials <- rep(1:numTrials$num_rows[1],times=length(numTrials$SubjID))
+
+con_explo_trials <- exploreAllSubjs[exploreAllSubjs$Condition == 2,]
+numTrials <- con_explo_trials %>% group_by(SubjID) %>% summarise(num_rows = length(SubjID))
+con_explo_trials$num_trials <- rep(1:numTrials$num_rows[1],times=length(numTrials$SubjID))
+
+exploreAllSubjs_learning <- rbind(uncon_explo_trials, con_explo_trials)
+
+exploreAllSubjs_learning$Condition_sorted <- as.factor(exploreAllSubjs_learning$Condition_factor)
+levels(exploreAllSubjs_learning$Condition_sorted) <- c("Uncontrollable","Controllable")
+exploreAllSubjs_learning$Condition_sorted <- factor(exploreAllSubjs_learning$Condition_sorted, levels=rev(levels(exploreAllSubjs_learning$Condition_sorted)))
+```
+
+
+```{r fig 2b, warnings=FALSE, message=FALSE}
+## plot optimal choice as of a function of trial number for each condition, with separate panels per age group
+exploLearning_conditions_ages <- exploreAllSubjs_learning %>% group_by(num_trials,Condition_sorted,AgeGroup_sorted) %>% summarise(N = n(), optChoice = mean(optimalChoice, na.rm = TRUE), sdOptChoice = sd(optimalChoice, na.rm = TRUE), seOptChoice = sdOptChoice/(sqrt(N)))
+
+learning_cond_age_plot <- ggplot(exploLearning_conditions_ages, aes(x = num_trials, y=optChoice, color=Condition_sorted)) +
+    geom_line(size=.5, alpha =.5) + 
+    facet_wrap(~AgeGroup_sorted) +
+    geom_smooth(method="lm", aes(fill=Condition_sorted),alpha=.4,size=1.5) +
+    labs(x="Trial Number", y="Optimal Exploratory Choice") +
+    ylim(0,1) +
+    geom_hline(yintercept=.5, linetype="dashed", color = "black") + #line at chance
+    theme_classic(base_size = 14) + theme(legend.position="right") +
+    scale_color_manual(values=c('#559CAD', '#3D5A80'),name="Condition") +          
+    scale_fill_manual(values=c('#559CAD', '#3D5A80'),name="Condition") 
+```
+
+```{r figure 2 final, warnings=FALSE, message=FALSE}
+fig2 <- plot_grid(stateAcc_learning_cond_age_plot, learning_cond_age_plot, align="h", axis = "bt",labels = c('a','b'), rel_widths = c(1,1.4))
+plot(fig2)
+```
+
+
+# Computational Modeling Results
+
+```{r load computational modeling data}
+#all modeling was done in Matlab so load csv files
+df <- read.csv(file.path(modelingDir, "Measures_SASSS_Dev.csv"), header=TRUE, skip = 1)
+df$SubjID <- df$id
+df$SubjID <- factor(df$SubjID)
+
+meanAccParticipant <- merge(meanAccParticipant, df[,c("SubjID","AlphaOM","InvTemp","SlopeOM","BiasOM","Mean.Arb","Mean.Omega","BIC_SS","BIC_SAS","BIC_MB","BIC_TS")], by=c("SubjID"), all=TRUE)
+```
+
+
+## Supplementary Fig 1: Improvement in model fit by age
+```{r} 
+TS_MB_plot <- ggplot(df, aes(x = age,y=((-2*BIC_MB)-(-2*BIC_TS)))) +
+    geom_point() +
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y=expression(BIC[LTS] - BIC[TS]))
+
+SS_SAS_plot <- ggplot(df, aes(x = age,y=((-2*BIC_SS)-(-2*BIC_SAS)))) +
+    geom_point() +
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y=expression(BIC[Spectator] - BIC[Actor]))
+
+BIC_diff_plot <- plot_grid(SS_SAS_plot,TS_MB_plot, align="h", axis = "bt",labels = c('a','b'))
+plot(BIC_diff_plot)
+```
+
+## Parameter estimate regressions by age
+```{r model-based linear regressions}
+
+#alpha omega
+estimate_alpha_age.m <- lm(AlphaOM~z_age,data=meanAccParticipant)
+estimate_alpha_ageSq.m <- lm(AlphaOM~(z_age + z_ageSq),data=meanAccParticipant)
+anova(estimate_alpha_age.m,estimate_alpha_ageSq.m)
+summary(estimate_alpha_age.m)
+
+#Inverse Temperature
+estimate_InvTemp_age.m <- lm(InvTemp~z_age,data=meanAccParticipant)
+estimate_InvTemp_ageSq.m <- lm(InvTemp~(z_age + z_ageSq),data=meanAccParticipant)
+anova(estimate_InvTemp_age.m,estimate_InvTemp_ageSq.m)
+summary(estimate_InvTemp_age.m)
+
+#Slope of sigmoidal
+estimate_slope_age.m <- lm(SlopeOM~z_age,data=meanAccParticipant)
+estimate_slope_ageSq.m <- lm(SlopeOM~(z_age + z_ageSq),data=meanAccParticipant)
+anova(estimate_slope_age.m,estimate_slope_ageSq.m)
+summary(estimate_slope_age.m)
+
+#Bias omega
+estimate_bias_age.m <- lm(BiasOM~z_age,data=meanAccParticipant)
+estimate_bias_ageSq.m <- lm(BiasOM~(z_age + z_ageSq),data=meanAccParticipant)
+anova(estimate_bias_age.m,estimate_bias_ageSq.m)
+summary(estimate_bias_age.m)
+
+#arbitration
+estimate_arb_age.m <- lm(Mean.Arb~z_age,data=meanAccParticipant)
+estimate_arb_ageSq.m <- lm(Mean.Arb~(z_age + z_ageSq),data=meanAccParticipant)
+anova(estimate_arb_age.m,estimate_arb_ageSq.m)
+summary(estimate_arb_age.m)
+```
+
+```{r Cohens f^2 local effect size for all model-derived estimates}
+meanAccParticipant$z_AlphaOM<-scale(meanAccParticipant$AlphaOM,center=TRUE,scale=TRUE)
+meanAccParticipant$z_InvTemp<-scale(meanAccParticipant$InvTemp,center=TRUE,scale=TRUE)
+meanAccParticipant$z_SlopeOM<-scale(meanAccParticipant$SlopeOM,center=TRUE,scale=TRUE)
+meanAccParticipant$z_BiasOM<-scale(meanAccParticipant$BiasOM,center=TRUE,scale=TRUE)
+meanAccParticipant$z_Mean.Arb<-scale(meanAccParticipant$Mean.Arb,center=TRUE,scale=TRUE)
+```
+
+```{r alpha effect size}
+#calculate f^2 for age using the formula R^2/(1-R^2)
+standardized_alpha.m<-lm(z_AlphaOM~z_age,data=meanAccParticipant)
+Rsq1 = summary(standardized_alpha.m) $r.squared
+```
+Cohen's f^2 local effect size for age on alpha: `r (Rsq1)/(1-Rsq1)` 
+
+```{r InvTemp effect size}
+#calculate f^2 for age using the formula R^2/(1-R^2)
+remove(Rsq1)
+standardized_InvTemp.m<-lm(z_InvTemp~z_age,data=meanAccParticipant)
+Rsq1 = summary(standardized_InvTemp.m) $r.squared
+```
+Cohen's f^2 local effect size for age on Inverse Temperature: `r (Rsq1)/(1-Rsq1)` 
+
+```{r slope effect size}
+#calculate f^2 for age using the formula R^2/(1-R^2)
+remove(Rsq1)
+standardized_SlopeOM.m<-lm(z_SlopeOM~z_age,data=meanAccParticipant)
+Rsq1 = summary(standardized_SlopeOM.m) $r.squared
+```
+Cohen's f^2 local effect size for age on Slope: `r (Rsq1)/(1-Rsq1)` 
+
+
+```{r bias effect size}
+#calculate f^2 for age using the formula R^2/(1-R^2)
+remove(Rsq1)
+standardized_BiasOM.m<-lm(z_BiasOM~z_age,data=meanAccParticipant)
+Rsq1 = summary(standardized_BiasOM.m) $r.squared
+```
+Cohen's f^2 local effect size for age on Bias: `r (Rsq1)/(1-Rsq1)` 
+
+## Supplementary Figure 3: model-derived estimates by age
+```{r model-derived estimates by age}
+alpha_plot <- ggplot(meanAccParticipant, aes(x = Age,y=AlphaOM)) +
+    geom_point(size=.5) + 
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y="Estimates (a.u.)") + 
+    theme_classic(base_size = 14) + theme(plot.title = element_text(hjust = 0.5),axis.title.y=element_blank()) +
+    ggtitle(expression("Alpha"[Omega]))
+
+Slope_plot <- ggplot(meanAccParticipant, aes(x = Age,y=SlopeOM)) +
+    geom_point(size=.5) +
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y="Estimates (a.u.)") +
+    theme_classic(base_size = 14) + theme(plot.title = element_text(hjust = 0.5),axis.title.y=element_blank()) +
+    ggtitle("Slope") 
+
+Bias_plot <- ggplot(meanAccParticipant, aes(x = Age,y=BiasOM)) +
+    geom_point(size=.5) +
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y="Estimates (a.u.)") +
+    theme_classic(base_size = 14) + theme(plot.title = element_text(hjust = 0.5),axis.title.y=element_blank()) +
+    ggtitle("Bias")
+
+Consistency_plot <- ggplot(meanAccParticipant, aes(x = Age,y=InvTemp)) +
+    geom_point(size=.5) +
+    geom_smooth(method="lm",color = "black",alpha=.4) +
+    labs(x="Age",y="Estimates (a.u.)") +
+    theme_classic(base_size = 14) + theme(plot.title = element_text(hjust = 0.5),axis.title.y=element_blank()) +
+    ggtitle("Inverse Temperature")
+
+SFig3 <- plot_grid(alpha_plot, Slope_plot, Bias_plot, Consistency_plot, labels = c('a', 'b','c','d','e'), align="v",nrow=1)
+plot(SFig3)
+```
+
+
+## Improvement in fit WM mediation models
+```{r mediation setup}
+#only 84 participants with working memory measure
+meanAccParticipant_n84 <- merge(meanAccParticipant_n84, df[,c("SubjID","BIC_SS","BIC_SAS","BIC_MB","BIC_TS")], by=c("SubjID"), all.x=TRUE)
+
+meanAccParticipant_n84$TSvSS_BIC <- meanAccParticipant_n84$BIC_TS - meanAccParticipant_n84$BIC_SS
+meanAccParticipant_n84$SASvSS_BIC <- meanAccParticipant_n84$BIC_SAS - meanAccParticipant_n84$BIC_SS
+meanAccParticipant_n84$LTSvSS_BIC <- meanAccParticipant_n84$BIC_MB - meanAccParticipant_n84$BIC_SS
+
+meanAccParticipant_n84$z_TSvSS_BIC <- as.vector(scale(meanAccParticipant_n84$TSvSS_BIC,center=TRUE,scale=TRUE))
+meanAccParticipant_n84$z_SASvSS_BIC <- as.vector(scale(meanAccParticipant_n84$SASvSS_BIC,center=TRUE,scale=TRUE))
+meanAccParticipant_n84$z_LTSvSS_BIC <- as.vector(scale(meanAccParticipant_n84$LTSvSS_BIC,center=TRUE,scale=TRUE))
+```
+
+```{r mediation wm delta BIC SS}
+#Is there a main effect of age on delta BIC TS-SS?
+total.fit <- lm(z_TSvSS_BIC ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(total.fit)
+#Is there a relationship between age and working memory? YES
+med.fit <- lm(z_RawScore_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(med.fit)
+#Is there a relationship between working memory and delta BIC (TS-SS), while controlling for age? NO BUT TRENDING
+out.fit <- lm(z_TSvSS_BIC ~ z_RawScore_n84 + z_Age_n84, data = meanAccParticipant_n84)
+summary(out.fit)
+#Does working memory mediate that relationship? YES
+#mediation model for non-parametric bootstrap with 10000 simulations
+med.out <- mediate(med.fit, out.fit, treat = "z_Age_n84", mediator = "z_RawScore_n84",
+                   boot = TRUE, sims = 10000)
+summary(med.out)
+```
+
+```{r mediation wm LTS SAS vs SS}
+
+#Is there a main effect of age on delta BIC TS-SS?
+total.fit <- lm(z_SASvSS_BIC ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(total.fit)
+#Is there a relationship between age and working memory? YES
+med.fit <- lm(z_RawScore_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(med.fit)
+#Is there a relationship between working memory and delta BIC (TS-SS), while controlling for age? NO BUT NEARLY (.0503)
+out.fit <- lm(z_SASvSS_BIC ~ z_RawScore_n84 + z_Age_n84, data = meanAccParticipant_n84)
+summary(out.fit)
+#Does working memory mediate that relationship? YES
+#mediation model for non-parametric bootstrap with 1000 simulations
+med.out <- mediate(med.fit, out.fit, treat = "z_Age_n84", mediator = "z_RawScore_n84",
+                   boot = TRUE, sims = 10000)
+summary(med.out)
+
+#Is there a main effect of age on delta BIC LTS-SS?
+total.fit <- lm(z_LTSvSS_BIC ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(total.fit)
+#Is there a relationship between age and working memory? YES
+med.fit <- lm(z_RawScore_n84 ~ z_Age_n84, data = meanAccParticipant_n84)
+summary(med.fit)
+#Is there a relationship between working memory and delta BIC (TS-SS), while controlling for age? NO BUT NEARLY (.0503)
+out.fit <- lm(z_LTSvSS_BIC ~ z_RawScore_n84 + z_Age_n84, data = meanAccParticipant_n84)
+summary(out.fit)
+#Does working memory mediate that relationship? YES
+#mediation model for non-parametric bootstrap with 1000 simulations
+med.out <- mediate(med.fit, out.fit, treat = "z_Age_n84", mediator = "z_RawScore_n84",
+                   boot = TRUE, sims = 10000)
+summary(med.out)
+
+```
+
+## Figure 3
+```{r histogram best model}
+#rename and reorder
+levels(df$ModelAttribStr) <- c("SAS","SS","MB Omega","Task Set") #rename
+df$ModelAttribStr <- factor(df$ModelAttribStr, levels=c('SS','SAS','MB Omega','Task Set')) #order
+levels(df$ModelAttribStr) <- c("Spectator","Actor","LTS","TS")
+
+best_model_fig <- ggplot(df, aes(x = factor(as.integer(age)),fill=ModelAttribStr)) +
+    geom_bar() +
+    labs(x="Age",y="Count") +
+    #theme_classic() + #scale_fill_brewer(palette="PuBuGn") +
+    guides(fill=guide_legend(title="Model")) +
+    theme_classic(base_size = 10) + 
+  scale_fill_manual(values=c("#D2B1C0","#9B5977","#B0CEE2", "#1C5BA6")) +
+scale_x_discrete(labels=c("8" = "8", "9" = "", "10" = "10","11"="","12"="12","13"="","14"="14","15"="","16"="16","17"="",
+                          "18"="18","19"="","20"="20","21"="","22"="22","23"="","24"="24","25"="")) 
+
+#load data from csv to create figures
+ex <- read.csv(file.path(modelingDir, "example_subjs/exampleSubj1.csv"), header=FALSE)
+
+colnames(ex)<- c("Arb","Condition")
+
+ex$trial <- (1:480)
+
+#conditions represented below, shaded is controllable
+d=data.frame(x1=c(40, 112, 200, 280, 344, 432), x2=c(64, 168, 240, 320, 376,480))
+
+arb_plot <- ggplot() +
+  geom_rect(data=d,aes(xmin=x1,xmax=x2,ymin=-Inf,ymax=Inf),fill="grey90") +
+  geom_line(data=ex,aes(x=trial,y=Arb),color ="#2171B5") +
+  labs(x="Trial",y="Arbitrator") +
+  theme_classic(base_size = 10) + theme(plot.title = element_text(hjust = 0.5)) + coord_cartesian(ylim = c(0, 1))
+
+#load data from csv to create figures
+ex_2 <- read.csv(file.path(modelingDir, "example_subjs/exampleSubj119.csv"), header=FALSE)
+
+colnames(ex_2)<- c("Arb","Condition")
+
+ex_2$trial <- (1:480)
+
+#conditions represented below, shaded is controllable
+d2=data.frame(x1=c(0, 88, 152, 224, 312, 392), x2=c(56, 112, 200, 256, 352,432))
+
+arb_plot2 <- ggplot() +
+  geom_rect(data=d2,aes(xmin=x1,xmax=x2,ymin=-Inf,ymax=Inf),fill="grey90") +
+  geom_line(data=ex_2,aes(x=trial,y=Arb),color ="#2171B5") +
+  labs(x="Trial",y="Arbitrator") +
+  theme_classic(base_size = 10) + theme(plot.title = element_text(hjust = 0.5)) + coord_cartesian(ylim = c(0, 1))
+
+model_schematic <- cowplot::ggdraw() + cowplot::draw_image(file.path(modelingDir, "fig2_model_schematic.png"), scale =.9)
+mediation_schematic <- cowplot::ggdraw() + cowplot::draw_image(file.path(modelingDir, "mediation_fig.png"))
+row_1 <- plot_grid(model_schematic,best_model_fig,labels = c('a','b'), rel_widths = c(1,1))
+row_2 <- plot_grid(arb_plot,arb_plot2,align="h", axis = "bt", labels = c('c','d'))
+row_3 <- plot_grid(mediation_schematic, labels = c('e'))
+fig3 <- plot_grid(row_1,row_2,row_3,nrow=3, rel_heights = c(.75,.5,1))
+plot(fig3)
+```
+
+# Explicit Task Knowledge
+```{r explicit knowledge questions}
+#note did not collect WM scores from handful of first participants so missing some data
+explicitKnowledge <- read.csv(file.path(qDir, "explicit_knowledge_q_n90.csv"), header = TRUE)
+
+#don't change parenthesis, Delete all of () items
+explicitKnowledge<- explicitKnowledge %>% dplyr::select(-c(StartDate, EndDate, Status, IPAddress, Progress, Duration..in.seconds., Finished, RecordedDate,ResponseId,RecipientLastName, RecipientFirstName, RecipientEmail,ExternalReference,LocationLatitude,LocationLongitude,DistributionChannel,UserLanguage))
+
+#Deletes rows 1 and 2, only answers visable
+explicitKnowledge<- slice(explicitKnowledge,-c(1:2))
+
+#add column names
+colnames(explicitKnowledge)<- c("SubjID","C_green","C_orange","C_pink","U_LH","U_vol", "U_PT","easierYN","easierCondition","strategy","stragey_MC","difficulty","engaging")
+
+explicitKnowledge <- droplevels(explicitKnowledge)
+
+#change to characters; below transformations won't work otherwise
+explicitKnowledge[, ] <- lapply(explicitKnowledge[, ], as.character)
+
+explicitKnowledge <- explicitKnowledge %>% mutate(SubjID = str_remove_all(SubjID, "MonCon"))
+explicitKnowledge$SubjID <- as.factor(explicitKnowledge$SubjID)
+
+#sum controllable total
+explicitKnowledge$C_green[explicitKnowledge$C_green == 'IM_5byiwnyUq5SkLdP']<-1
+explicitKnowledge$C_green[explicitKnowledge$C_green != 1]<-0
+explicitKnowledge$C_green<- as.numeric(explicitKnowledge$C_green)
+
+explicitKnowledge$C_orange[explicitKnowledge$C_orange == 'IM_cGSlDZHr9rAvI1v']<-1
+explicitKnowledge$C_orange[explicitKnowledge$C_orange != 1]<-0
+explicitKnowledge$C_orange<- as.numeric(explicitKnowledge$C_orange)
+
+explicitKnowledge$C_pink[explicitKnowledge$C_pink == 'IM_20tjmbukTsjjNNX']<-1
+explicitKnowledge$C_pink[explicitKnowledge$C_pink != 1]<-0
+explicitKnowledge$C_pink<- as.numeric(explicitKnowledge$C_pink)
+
+
+#sum uncontrollable total
+explicitKnowledge$U_LH[explicitKnowledge$U_LH == 'IM_20tjmbukTsjjNNX']<-1
+explicitKnowledge$U_LH[explicitKnowledge$U_LH != 1]<-0
+explicitKnowledge$U_LH<- as.numeric(explicitKnowledge$U_LH)
+
+explicitKnowledge$U_vol[explicitKnowledge$U_vol == 'IM_3lYM1VFNuPNWWwJ']<-1
+explicitKnowledge$U_vol[explicitKnowledge$U_vol != 1]<-0
+explicitKnowledge$U_vol<- as.numeric(explicitKnowledge$U_vol)
+
+explicitKnowledge$U_PT[explicitKnowledge$U_PT == 'IM_4ZoANqBWGZ4sYXX']<-1
+explicitKnowledge$U_PT[explicitKnowledge$U_PT != 1]<-0
+explicitKnowledge$U_PT<- as.numeric(explicitKnowledge$U_PT)
+
+explicitKnowledge$easierCondition[explicitKnowledge$easierCondition == 'IM_eQaHAXU7QfllDs9']<-'Uncontrollable'
+explicitKnowledge$easierCondition[explicitKnowledge$easierCondition == 'IM_8wCDeTdgCWcZdL7']<-'Controllable'
+
+explicitKnowledge$C_explicitKnowledge <- rowSums(explicitKnowledge[2:4])
+explicitKnowledge$U_explicitKnowledge <- rowSums(explicitKnowledge[5:7])
+explicitKnowledge$Total_explicitKnowledge <- rowSums(explicitKnowledge[14:15])
+
+#merge with task data
+meanAccParticipant  <- merge(meanAccParticipant,explicitKnowledge[, c("SubjID","Total_explicitKnowledge")],by="SubjID", all.x = TRUE)
+```
+
+```{r explicit knowledge all correct vs not by age group}
+meanAccParticipant$Total_explicitKnowledge_AllCorrect <- ifelse(meanAccParticipant$Total_explicitKnowledge == '6', c("Yes"), c("No")) 
+meanAccParticipant$Total_explicitKnowledge_AllCorrect <- as.factor(meanAccParticipant$Total_explicitKnowledge_AllCorrect)
+
+#chi-squared test to see if proportion of correct responses differ by age group
+chisq.test(meanAccParticipant$AgeGroup_sorted,meanAccParticipant$Total_explicitKnowledge_AllCorrect,correct=FALSE)
+
+#test children vs. adults
+chisq.test(meanAccParticipant$AgeGroup_sorted[meanAccParticipant$AgeGroup_sorted != 'Adolescents'],meanAccParticipant$Total_explicitKnowledge_AllCorrect[meanAccParticipant$AgeGroup_sorted != 'Adolescents'],correct=FALSE)
+
+#test teens vs. adults
+chisq.test(meanAccParticipant$AgeGroup_sorted[meanAccParticipant$AgeGroup_sorted != 'Children'],meanAccParticipant$Total_explicitKnowledge_AllCorrect[meanAccParticipant$AgeGroup_sorted != 'Children'],correct=FALSE)
+
+#test children vs. teens
+chisq.test(meanAccParticipant$AgeGroup_sorted[meanAccParticipant$AgeGroup_sorted != 'Adults'],meanAccParticipant$Total_explicitKnowledge_AllCorrect[meanAccParticipant$AgeGroup_sorted != 'Adults'],correct=FALSE)
+```
+
+
+# Arbitrator 
+How do dynamics of the arbitrator change over time, across age, and by condition?
+```{r arbitrator LMER}
+#load csv file of trial-by-trial arbitrator data
+arb <- read.csv(file.path(modelingDir, "arb_trialbytrial.csv"), header = FALSE)
+colnames(arb)<- c("subj_number","trial","condition","arbitrator")
+
+arb$subj_number <- as.factor(arb$subj_number) 
+arb$condition <- as.factor(arb$condition) 
+
+arb$z_age <- exploreAllSubjs$z_age
+arb$z_ageSq <- exploreAllSubjs$z_ageSq
+arb$z_globalTrialNum <- exploreAllSubjs$z_globalTrialNum
+
+arb_m1 <- mixed(arbitrator~condition*z_age*z_globalTrialNum+(1+z_globalTrialNum*condition|subj_number),data=arb,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+arb_m2 <- mixed(arbitrator~condition*(z_age+z_ageSq)*z_globalTrialNum+(1+z_globalTrialNum*condition|subj_number),data=arb,control=lmerControl(optimizer = "bobyqa",optCtrl=list(maxfun=1e6)),method="LRT")
+
+anova(arb_m1, arb_m2)
+nice(arb_m1)
+```
